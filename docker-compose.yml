@@ -1,0 +1,28 @@
+version: "3"  # optional since v1.27.0
+
+services:
+
+  hercules:
+    ports:
+      - "8080:80"
+      - "2222:22"
+    volumes:
+      - /mnt/logs/hercules:/var/log
+    image: docker.io/gkr0/pcysys-hercules:latest
+    networks: 
+      - pcysys
+
+  neptune:
+    ports:
+      - "2211:22"
+    volumes:
+      - /mnt/logs/neptune:/var/log
+    environment:
+      - HERCULES_URL=http://hercules
+    image: docker.io/gkr0/pcysys-neptune:latest
+    networks: 
+      - pcysys
+
+networks:
+  pcysys:
+    driver: bridge

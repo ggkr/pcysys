@@ -1,0 +1,95 @@
+---
+- name: deploy pcysys task
+  hosts: myserver
+  vars:
+    log_root: "/mnt/logs"
+    hercules_ansible_url: http://localhost:8080
+    nmap_log_name: "nmap-hercules.log"
+    neptune_container: tmp_neptune_1  # ideally will query for name from host, and not supply as var
+  tasks:
+    - name: verify packages on hosts
+      apt:
+        pkg:
+        - docker.io
+        - docker-compose
+      become: yes
+    
+    - name: verify logs path
+      file:
+        path: "{{ item }}"
+        state: directory
+        recurse: yes
+        mode: 0755
+      with_items:
+      - "{{ log_root }}/hercules"
+      - "{{ log_root }}/hercules/nginx"  # without it- container will fail
+      - "{{ log_root }}/neptune"
+      become: yes  # permissions issues when creating the directories
+  
+    - name: verify ports are available
+      wait_for:
+        port: "{{ item }}"
+        state: absent          # absent - ports are not in use
+        delay: 0              
+        timeout: 3            
+      ignore_errors: no
+      with_items:
+        - 8080
+        - 2222
+        - 2211
+  
+    - name: copy docker-compose file
+      ansible.builtin.copy:
+        src: ./docker-compose.yml
+        dest: /tmp/docker-compose.yml
+  
+    - name: deploy docker-compose  # compose will handle container availability (create \ update \ etc.)
+      community.docker.docker_compose:
+        project_src: /tmp
+  
+    - name: verify hercules availability
+      uri:
+        url: "{{ hercules_ansible_url }}"
+        return_content: yes
+  
+    - name: trigger nmap on neptune
+      # community.docker.docker doesn't work
+      ansible.builtin.command:
+        argv:
+        - docker 
+        - exec 
+        - "{{ neptune_container }}" 
+        - sh 
+        - -c 
+        - "nmap hercules > /var/log/{{ nmap_log_name }}"
+  
+    - name: check nmap log
+      stat:
+        path: "{{ log_root }}/neptune/{{ nmap_log_name }}"
+      register: nmap_exists
+      failed_when: not nmap_exists.stat.exists|bool
+    
+    - name: read nmap log
+      ansible.builtin.slurp: 
+        src: "{{ log_root }}/neptune/{{ nmap_log_name }}"
+      register: log_content
+          
+    - name: print nmap log
+      vars: 
+        content: "{{log_content['content'] | b64decode }}"
+      ansible.builtin.debug:
+        msg: "{{ content.split('\n') }}"
+
+    - name: invoke python on Neptune
+      ansible.builtin.command:
+        argv: 
+        - docker
+        - exec
+        - "{{ neptune_container }}"
+        - /checkHercules.py
+      register: hercules_test
+  
+    - name: print hercules test result
+      ansible.builtin.debug:
+        msg: "python script output: {{ hercules_test.stdout }}"
+      
